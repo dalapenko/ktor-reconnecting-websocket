@@ -9,6 +9,8 @@ import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.http.HttpStatusCode
 import io.ktor.websocket.Frame
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -271,7 +273,14 @@ class ReconnectingWebSocketTest {
 
     @Test
     fun `secure true uses wss scheme in connecting state URL`() = runTest {
-        val mockEngine = MockEngine { respondError(HttpStatusCode.ServiceUnavailable) }
+        // Pause the MockEngine response so the Connecting state is stable while we assert.
+        // Without this, MockEngine can respond synchronously and the state transitions from
+        // Connecting → Failed before StateFlow delivers Connecting to any collector (conflation).
+        val connectionPaused = CompletableDeferred<Unit>()
+        val mockEngine = MockEngine {
+            connectionPaused.await()
+            respondError(HttpStatusCode.ServiceUnavailable)
+        }
         val client = HttpClient(mockEngine) { install(WebSockets) }
 
         val ws = ReconnectingWebSocket(
@@ -284,25 +293,26 @@ class ReconnectingWebSocketTest {
             logger = Logger.EMPTY
         )
 
-        val states = mutableListOf<WebSocketConnectionState>()
-        val stateJob = launch { ws.connectionState.collect { states.add(it) } }
+        val connectJob = launch { ws.connect().collect { } }
 
-        launch { ws.connect().collect { } }.join()
-        stateJob.cancel()
+        // Wait until Connecting is the current state — guaranteed stable because MockEngine is paused
+        val connectingState = ws.connectionState
+            .first { it is WebSocketConnectionState.Connecting } as WebSocketConnectionState.Connecting
 
-        val connectingState = states.filterIsInstance<WebSocketConnectionState.Connecting>().firstOrNull()
-        assertNotNull(connectingState, "Expected a Connecting state to be emitted")
-        assertTrue(
-            connectingState.url.startsWith("wss://"),
-            "Expected wss:// scheme, got: ${connectingState.url}"
-        )
+        assertTrue(connectingState.url.startsWith("wss://"), "Expected wss:// scheme, got: ${connectingState.url}")
 
+        connectionPaused.complete(Unit)
+        connectJob.join()
         client.close()
     }
 
     @Test
     fun `secure false uses ws scheme in connecting state URL`() = runTest {
-        val mockEngine = MockEngine { respondError(HttpStatusCode.ServiceUnavailable) }
+        val connectionPaused = CompletableDeferred<Unit>()
+        val mockEngine = MockEngine {
+            connectionPaused.await()
+            respondError(HttpStatusCode.ServiceUnavailable)
+        }
         val client = HttpClient(mockEngine) { install(WebSockets) }
 
         val ws = ReconnectingWebSocket(
@@ -315,19 +325,15 @@ class ReconnectingWebSocketTest {
             logger = Logger.EMPTY
         )
 
-        val states = mutableListOf<WebSocketConnectionState>()
-        val stateJob = launch { ws.connectionState.collect { states.add(it) } }
+        val connectJob = launch { ws.connect().collect { } }
 
-        launch { ws.connect().collect { } }.join()
-        stateJob.cancel()
+        val connectingState = ws.connectionState
+            .first { it is WebSocketConnectionState.Connecting } as WebSocketConnectionState.Connecting
 
-        val connectingState = states.filterIsInstance<WebSocketConnectionState.Connecting>().firstOrNull()
-        assertNotNull(connectingState, "Expected a Connecting state to be emitted")
-        assertTrue(
-            connectingState.url.startsWith("ws://"),
-            "Expected ws:// scheme, got: ${connectingState.url}"
-        )
+        assertTrue(connectingState.url.startsWith("ws://"), "Expected ws:// scheme, got: ${connectingState.url}")
 
+        connectionPaused.complete(Unit)
+        connectJob.join()
         client.close()
     }
 

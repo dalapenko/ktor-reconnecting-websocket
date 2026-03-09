@@ -1,8 +1,9 @@
 package io.github.dalapenko.ktor.websocket.reconnect
 
-import io.ktor.client.*
-import io.ktor.client.plugins.logging.*
-import io.ktor.websocket.*
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.logging.Logger
+import io.ktor.websocket.Frame
+import io.ktor.websocket.readText
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.map
@@ -39,6 +40,7 @@ import kotlinx.coroutines.flow.map
  * @param host WebSocket server host
  * @param port WebSocket server port
  * @param path WebSocket endpoint path (must start with "/")
+ * @param secure If true, uses `wss://` (TLS). Defaults to false (`ws://`).
  * @param retryPolicy Configuration for retry behavior
  * @param logger Optional Ktor Logger for logging connection events
  * @return Flow of incoming WebSocket frames
@@ -47,6 +49,7 @@ fun HttpClient.reconnectingWebSocket(
     host: String,
     port: Int,
     path: String,
+    secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
     logger: Logger? = null
 ): Flow<Frame> {
@@ -55,6 +58,7 @@ fun HttpClient.reconnectingWebSocket(
         host = host,
         port = port,
         path = path,
+        secure = secure,
         retryPolicy = retryPolicy,
         logger = logger
     )
@@ -82,6 +86,7 @@ fun HttpClient.reconnectingWebSocket(
  * @param host WebSocket server host
  * @param port WebSocket server port
  * @param path WebSocket endpoint path
+ * @param secure If true, uses `wss://` (TLS). Defaults to false (`ws://`).
  * @param retryPolicy Configuration for retry behavior
  * @param logger Optional Ktor Logger for logging connection events
  * @return Flow of incoming text messages as Strings
@@ -90,6 +95,7 @@ fun HttpClient.reconnectingWebSocketText(
     host: String,
     port: Int,
     path: String,
+    secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
     logger: Logger? = null
 ): Flow<String> {
@@ -97,6 +103,7 @@ fun HttpClient.reconnectingWebSocketText(
         host = host,
         port = port,
         path = path,
+        secure = secure,
         retryPolicy = retryPolicy,
         logger = logger
     ).mapTextFrames()
@@ -140,6 +147,7 @@ fun HttpClient.reconnectingWebSocketText(
  * @param host WebSocket server host
  * @param port WebSocket server port
  * @param path WebSocket endpoint path
+ * @param secure If true, uses `wss://` (TLS). Defaults to false (`ws://`).
  * @param retryPolicy Configuration for retry behavior
  * @param logger Optional Ktor Logger for logging connection events
  * @return A [ReconnectingWebSocket] instance
@@ -148,6 +156,7 @@ fun HttpClient.createReconnectingWebSocket(
     host: String,
     port: Int,
     path: String,
+    secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
     logger: Logger? = null
 ): ReconnectingWebSocket {
@@ -156,6 +165,7 @@ fun HttpClient.createReconnectingWebSocket(
         host = host,
         port = port,
         path = path,
+        secure = secure,
         retryPolicy = retryPolicy,
         logger = logger
     )

@@ -31,17 +31,17 @@ sealed class WebSocketConnectionState {
      * Connection was lost and a reconnection attempt is scheduled.
      * 
      * @param attempt Current retry attempt number (1-based)
-     * @param maxAttempts Maximum number of retry attempts (-1 for infinite)
+     * @param maxAttempts Maximum number of retry attempts, or `null` for infinite
      * @param nextRetryIn Duration until the next retry attempt
      * @param lastError The exception that caused the disconnection
      */
     data class Reconnecting(
         val attempt: Int,
-        val maxAttempts: Int,
+        val maxAttempts: Int?,
         val nextRetryIn: Duration,
         val lastError: Throwable? = null
     ) : WebSocketConnectionState() {
-        val isInfinite: Boolean get() = maxAttempts == -1
+        val isInfinite: Boolean get() = maxAttempts == null
 
         override fun toString(): String {
             val attemptsStr = if (isInfinite) "$attempt/∞" else "$attempt/$maxAttempts"

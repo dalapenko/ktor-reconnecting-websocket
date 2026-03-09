@@ -63,20 +63,16 @@ dependencies {
 ### Basic Usage
 
 ```kotlin
-import io.github.dalapenko.ktor.websocket.reconnect.*
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.websocket.*
-
 val client = HttpClient(CIO) {
     install(WebSockets)
 }
 
-// Connect with auto-reconnect
+// Connect with auto-reconnect (use secure = true for wss://)
 client.reconnectingWebSocket(
     host = "api.example.com",
     port = 443,
     path = "/stream",
+    secure = true,
     retryPolicy = RetryPolicy.DEFAULT
 ).collect { frame ->
     when (frame) {
@@ -143,7 +139,9 @@ Track connection status in real-time:
 ```kotlin
 val ws = client.createReconnectingWebSocket(
     host = "api.example.com",
+    port = 443,
     path = "/stream",
+    secure = true,
     retryPolicy = RetryPolicy.INFINITE
 )
 
@@ -151,23 +149,20 @@ val ws = client.createReconnectingWebSocket(
 launch {
     ws.connectionState.collect { state ->
         when (state) {
-            is WebSocketConnectionState.Idle -> 
-                println("Not connected yet")
-            
-            is WebSocketConnectionState.Connecting -> 
+            is WebSocketConnectionState.Disconnected ->
+                println("Not connected")
+
+            is WebSocketConnectionState.Connecting ->
                 println("Connecting to ${state.url}...")
-            
-            is WebSocketConnectionState.Connected -> 
+
+            is WebSocketConnectionState.Connected ->
                 println("✓ Connected to ${state.url}")
-            
-            is WebSocketConnectionState.Reconnecting -> 
-                println("⟳ Reconnecting (attempt ${state.attempt}/${state.maxRetries ?: "∞"}, retry in ${state.nextRetryDelay})")
-            
-            is WebSocketConnectionState.Disconnected -> 
-                println("Disconnected: ${state.reason}")
-            
-            is WebSocketConnectionState.Failed -> 
-                println("✗ Failed after ${state.attempts} attempts: ${state.reason}")
+
+            is WebSocketConnectionState.Reconnecting ->
+                println("⟳ Reconnecting (attempt ${state.attempt}/${state.maxAttempts ?: "∞"}, retry in ${state.nextRetryIn})")
+
+            is WebSocketConnectionState.Failed ->
+                println("✗ Failed after ${state.totalAttempts} attempts: ${state.reason}")
         }
     }
 }
@@ -183,8 +178,6 @@ ws.connect().collect { frame ->
 Leverage Ktor's native logging for debugging:
 
 ```kotlin
-import io.ktor.client.plugins.logging.*
-
 val client = HttpClient(CIO) {
     install(WebSockets)
     install(Logging) {
@@ -212,10 +205,11 @@ client.reconnectingWebSocket(
 #### 1. `reconnectingWebSocket` (Simple Flow-based)
 
 ```kotlin
-suspend fun HttpClient.reconnectingWebSocket(
+fun HttpClient.reconnectingWebSocket(
     host: String,
-    port: Int = 80,
-    path: String = "/",
+    port: Int,
+    path: String,
+    secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
     logger: Logger? = null
 ): Flow<Frame>
@@ -226,10 +220,11 @@ suspend fun HttpClient.reconnectingWebSocket(
 #### 2. `reconnectingWebSocketText` (Text-only messages)
 
 ```kotlin
-suspend fun HttpClient.reconnectingWebSocketText(
+fun HttpClient.reconnectingWebSocketText(
     host: String,
-    port: Int = 80,
-    path: String = "/",
+    port: Int,
+    path: String,
+    secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
     logger: Logger? = null
 ): Flow<String>
@@ -242,14 +237,15 @@ suspend fun HttpClient.reconnectingWebSocketText(
 ```kotlin
 fun HttpClient.createReconnectingWebSocket(
     host: String,
-    port: Int = 80,
-    path: String = "/",
+    port: Int,
+    path: String,
+    secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
     logger: Logger? = null
 ): ReconnectingWebSocket
 ```
 
-**Use when:** You need access to connection state and lifecycle methods.
+**Use when:** You need access to connection state, sending messages, and lifecycle methods.
 
 ### Classes
 
@@ -258,12 +254,13 @@ fun HttpClient.createReconnectingWebSocket(
 Defines reconnection behavior:
 
 ```kotlin
-data class RetryPolicy(
-    val maxRetries: Int?,         // null = infinite
-    val initialDelay: Duration,   // First retry delay
-    val maxDelay: Duration,       // Maximum delay cap
-    val delayMultiplier: Double,  // Exponential growth factor
-    val jitterFactor: Double      // Random jitter (0.0 - 1.0)
+class RetryPolicy(
+    val maxRetries: Int,              // -1 = infinite, 0 = no retry, N = retry N times
+    val initialDelay: Duration,       // First retry delay
+    val maxDelay: Duration,           // Maximum delay cap
+    val delayMultiplier: Double,      // Exponential backoff multiplier
+    val jitterFactor: Double,         // Random jitter (0.0 - 1.0)
+    val retryOnException: (Throwable) -> Boolean  // Exception filter predicate
 )
 ```
 
@@ -280,17 +277,38 @@ Sealed class representing connection states:
 
 ```kotlin
 sealed class WebSocketConnectionState {
-    data object Idle : WebSocketConnectionState()
+    data object Disconnected : WebSocketConnectionState()
     data class Connecting(val url: String) : WebSocketConnectionState()
     data class Connected(val url: String) : WebSocketConnectionState()
     data class Reconnecting(
-        val url: String,
         val attempt: Int,
-        val maxRetries: Int?,
-        val nextRetryDelay: Duration
+        val maxAttempts: Int?,    // null = infinite
+        val nextRetryIn: Duration,
+        val lastError: Throwable? = null
     ) : WebSocketConnectionState()
-    data class Disconnected(val reason: String?) : WebSocketConnectionState()
-    data class Failed(val reason: String, val attempts: Int) : WebSocketConnectionState()
+    data class Failed(
+        val reason: String,
+        val lastError: Throwable? = null,
+        val totalAttempts: Int = 0
+    ) : WebSocketConnectionState()
+}
+```
+
+**Helper properties** available on all states: `isConnected`, `isConnecting`, `isFailed`.
+
+#### `ReconnectingWebSocket`
+
+The main class, returned by `createReconnectingWebSocket`:
+
+```kotlin
+class ReconnectingWebSocket {
+    val connectionState: StateFlow<WebSocketConnectionState>
+    val isConnected: Boolean
+
+    fun connect(): Flow<Frame>              // Start receiving frames
+    suspend fun send(frame: Frame)          // Send any frame (throws if not connected)
+    suspend fun sendText(text: String)      // Convenience for sending text
+    suspend fun close(reason: String)       // Graceful shutdown
 }
 ```
 
@@ -303,11 +321,12 @@ sealed class WebSocketConnectionState {
 ```kotlin
 val client = HttpClient(CIO) { install(WebSockets) }
 
-// Connect to a streaming API
+// Connect to a streaming API (secure = true for wss://)
 client.reconnectingWebSocketText(
     host = "api.crypto.com",
     port = 443,
     path = "/prices",
+    secure = true,
     retryPolicy = RetryPolicy.INFINITE  // Never stop trying
 ).collect { message ->
     val price = Json.decodeFromString<CryptoPrice>(message)
@@ -323,6 +342,7 @@ val chatSocket = client.createReconnectingWebSocket(
     host = "chat.example.com",
     port = 443,
     path = "/chat",
+    secure = true,
     retryPolicy = RetryPolicy.AGGRESSIVE
 )
 
@@ -330,9 +350,9 @@ val chatSocket = client.createReconnectingWebSocket(
 launch {
     chatSocket.connectionState.collect { state ->
         when (state) {
-            is Connected -> showOnlineIndicator()
-            is Reconnecting -> showReconnectingIndicator(state.attempt)
-            is Failed -> showOfflineDialog()
+            is WebSocketConnectionState.Connected -> showOnlineIndicator()
+            is WebSocketConnectionState.Reconnecting -> showReconnectingIndicator(state.attempt)
+            is WebSocketConnectionState.Failed -> showOfflineDialog()
             else -> {}
         }
     }
@@ -350,7 +370,7 @@ launch {
 
 // Send messages
 suspend fun sendMessage(text: String) {
-    chatSocket.send(Frame.Text(text))
+    chatSocket.sendText(text)
 }
 ```
 
@@ -369,6 +389,7 @@ client.reconnectingWebSocket(
     host = "iot.platform.com",
     port = 8883,
     path = "/device/sensor-123",
+    secure = true,
     retryPolicy = RetryPolicy.CONSERVATIVE,
     logger = Logger.DEFAULT  // Logs all connection events
 ).collect { frame ->

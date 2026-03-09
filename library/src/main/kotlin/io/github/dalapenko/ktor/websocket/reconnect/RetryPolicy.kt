@@ -20,30 +20,32 @@ import kotlin.time.Duration.Companion.seconds
  * ```kotlin
  * // Default policy: 5 retries with exponential backoff
  * val default = RetryPolicy.DEFAULT
- * 
+ *
  * // Infinite retries for critical connections
  * val infinite = RetryPolicy.INFINITE
- * 
+ *
  * // No retry - fail immediately
  * val noRetry = RetryPolicy.NO_RETRY
- * 
+ *
  * // Custom policy
  * val custom = RetryPolicy(
  *     maxRetries = 10,
  *     initialDelay = 1.seconds,
  *     maxDelay = 60.seconds,
- *     delayMultiplier = 2.0
+ *     delayMultiplier = 2.0,
+ *     retryOnException = { it !is CancellationException }
  * )
  * ```
- * 
- * @param maxRetries Maximum number of retry attempts. -1 for infinite, 0 for no retry.
+ *
+ * @param maxRetries Maximum number of retry attempts. `-1` for infinite, `0` for no retry, positive for a fixed limit.
  * @param initialDelay Delay before the first retry attempt.
  * @param maxDelay Maximum delay between retry attempts (caps exponential growth).
  * @param delayMultiplier Multiplier for exponential backoff (e.g., 2.0 doubles delay each time).
  * @param jitterFactor Random jitter factor (0.0 to 1.0) to prevent synchronized retries.
  * @param retryOnException Predicate to determine if a specific exception should trigger retry.
+ *   Note: [RetryPolicy] is not a `data class` — lambdas do not support structural equality.
  */
-data class RetryPolicy(
+class RetryPolicy(
     val maxRetries: Int = 5,
     val initialDelay: Duration = 2.seconds,
     val maxDelay: Duration = 30.seconds,

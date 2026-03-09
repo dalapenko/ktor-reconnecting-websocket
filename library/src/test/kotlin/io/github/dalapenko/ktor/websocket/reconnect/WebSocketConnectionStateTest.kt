@@ -1,6 +1,11 @@
 package io.github.dalapenko.ktor.websocket.reconnect
 
-import kotlin.test.*
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 class WebSocketConnectionStateTest {
@@ -69,15 +74,15 @@ class WebSocketConnectionStateTest {
     }
 
     @Test
-    fun `Reconnecting isInfinite with -1 maxAttempts`() {
+    fun `Reconnecting isInfinite with null maxAttempts`() {
         val state = WebSocketConnectionState.Reconnecting(
             attempt = 10,
-            maxAttempts = -1,
+            maxAttempts = null,
             nextRetryIn = 2.seconds
         )
 
         assertTrue(state.isInfinite)
-        assertEquals(-1, state.maxAttempts)
+        assertNull(state.maxAttempts)
     }
 
     @Test
@@ -109,7 +114,7 @@ class WebSocketConnectionStateTest {
     fun `Reconnecting toString formats correctly for infinite retries`() {
         val state = WebSocketConnectionState.Reconnecting(
             attempt = 10,
-            maxAttempts = -1,
+            maxAttempts = null,
             nextRetryIn = 2.seconds
         )
 

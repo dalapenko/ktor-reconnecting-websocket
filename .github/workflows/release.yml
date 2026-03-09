@@ -8,21 +8,24 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    
+
+    permissions:
+      contents: write  # Required to create GitHub Releases
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
-    
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
     - name: Set up JDK 17
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12  # v4.7.0
       with:
         java-version: '17'
         distribution: 'temurin'
         cache: gradle
-    
+
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
-    
+
     - name: Extract version from tag
       id: get_version
       run: |
@@ -31,7 +34,7 @@ jobs:
         TAG_VERSION=${TAG_VERSION#v}
         echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_OUTPUT
         echo "Tag version: $TAG_VERSION"
-    
+
     - name: Extract version from build.gradle.kts
       id: get_library_version
       run: |
@@ -39,31 +42,28 @@ jobs:
         LIBRARY_VERSION=$(grep '^version = ' library/build.gradle.kts | sed 's/version = "\(.*\)"/\1/')
         echo "LIBRARY_VERSION=$LIBRARY_VERSION" >> $GITHUB_OUTPUT
         echo "Library version: $LIBRARY_VERSION"
-    
+
     - name: Validate versions match
+      env:
+        TAG_VERSION: ${{ steps.get_version.outputs.TAG_VERSION }}
+        LIBRARY_VERSION: ${{ steps.get_library_version.outputs.LIBRARY_VERSION }}
       run: |
-        TAG_VERSION=${{ steps.get_version.outputs.TAG_VERSION }}
-        LIBRARY_VERSION=${{ steps.get_library_version.outputs.LIBRARY_VERSION }}
-        
         echo "Comparing versions:"
         echo "  Tag version:     $TAG_VERSION"
         echo "  Library version: $LIBRARY_VERSION"
-        
+
         if [ "$TAG_VERSION" != "$LIBRARY_VERSION" ]; then
-          echo "❌ ERROR: Version mismatch!"
-          echo "   Tag version ($TAG_VERSION) does not match library version ($LIBRARY_VERSION)"
-          echo "   Please update the version in library/build.gradle.kts to match the tag"
+          echo "ERROR: Version mismatch!"
+          echo "  Tag version ($TAG_VERSION) does not match library version ($LIBRARY_VERSION)"
+          echo "  Please update the version in library/build.gradle.kts to match the tag"
           exit 1
         fi
-        
-        echo "✅ Version validation passed: $TAG_VERSION"
-    
-    - name: Build library
+
+        echo "Version validation passed: $TAG_VERSION"
+
+    - name: Build and test library
       run: ./gradlew :library:build --no-daemon --stacktrace
-    
-    - name: Run tests
-      run: ./gradlew :library:test --no-daemon --stacktrace
-    
+
     - name: Publish to Maven Central
       env:
         ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
@@ -71,10 +71,20 @@ jobs:
         ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
         ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
       run: ./gradlew :library:publishToMavenCentral --no-daemon --stacktrace
-    
+
+    - name: Create GitHub Release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG_NAME: ${{ github.ref_name }}
+      run: |
+        gh release create "$TAG_NAME" \
+          --title "$TAG_NAME" \
+          --generate-notes \
+          library/build/libs/*.jar
+
     - name: Upload artifacts on failure
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
       with:
         name: debug-artifacts
         path: |

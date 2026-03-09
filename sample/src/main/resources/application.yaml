@@ -1,0 +1,6 @@
+ktor:
+  application:
+    modules:
+      - io.github.dalapenko.ktor.websocket.reconnect.sample.ApplicationKt.module
+  deployment:
+    port: 8080

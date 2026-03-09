@@ -72,10 +72,13 @@ jobs:
         ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
       run: ./gradlew :library:publishToMavenCentral --no-daemon --stacktrace
     
-    - name: Upload artifacts
+    - name: Upload artifacts on failure
+      if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: published-artifacts
+        name: debug-artifacts
         path: |
           library/build/libs/
           library/build/publications/
+          library/build/test-results/
+          library/build/reports/

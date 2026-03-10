@@ -1,12 +1,10 @@
 package io.github.dalapenko.ktor.websocket.reconnect
 
-import io.ktor.client.HttpClient
+import io.ktor.client.*
 import io.ktor.client.plugins.logging.Logger
-import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
-import io.ktor.client.plugins.websocket.webSocket
-import io.ktor.websocket.CloseReason
-import io.ktor.websocket.Frame
-import io.ktor.websocket.close
+import io.ktor.client.plugins.websocket.*
+import io.ktor.client.request.*
+import io.ktor.websocket.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -27,6 +25,8 @@ import java.util.concurrent.atomic.AtomicReference
  * - Observable connection state via StateFlow
  * - Graceful shutdown
  * - Both plain (`ws://`) and secure (`wss://`) connections
+ * - Optional port (omit for standard ports implied by scheme)
+ * - Authentication via customizable request builder
  *
  * ## Usage Examples:
  *
@@ -47,14 +47,26 @@ import java.util.concurrent.atomic.AtomicReference
  * }
  * ```
  *
- * ### Secure WebSocket (wss://):
+ * ### Domain-only host without explicit port:
+ * ```kotlin
+ * val ws = ReconnectingWebSocket(
+ *     client = client,
+ *     host = "api.example.com",
+ *     path = "/stream",
+ *     secure = true  // Uses wss:// with default port 443
+ * )
+ * ```
+ *
+ * ### Secure WebSocket (wss://) with authentication:
  * ```kotlin
  * val ws = ReconnectingWebSocket(
  *     client = client,
  *     host = "example.com",
- *     port = 443,
  *     path = "/events",
- *     secure = true
+ *     secure = true,
+ *     requestBuilder = {
+ *         headers.append("Authorization", "Bearer $token")
+ *     }
  * )
  * ```
  *
@@ -72,10 +84,13 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * @param client The Ktor HttpClient with WebSockets plugin installed
  * @param host WebSocket server host
- * @param port WebSocket server port
+ * @param port WebSocket server port. If null, the scheme default is used (80 for `ws://`, 443 for `wss://`).
  * @param path WebSocket endpoint path
  * @param secure If true, uses `wss://` (TLS). Defaults to false (`ws://`).
  * @param retryPolicy Configuration for retry behavior
+ * @param requestBuilder Optional lambda applied to the HTTP upgrade request on every connection attempt.
+ *                       Use this to set authentication headers, cookies, query parameters, or any
+ *                       other request customization (e.g. `headers.append("Authorization", "Bearer $token")`).
  * @param logger Optional Ktor Logger for logging connection events.
  *               If null, no logging is performed.
  *               Use [Logger.Companion.DEFAULT] for SLF4J, [Logger.Companion.SIMPLE] for println,
@@ -84,13 +99,23 @@ import java.util.concurrent.atomic.AtomicReference
 class ReconnectingWebSocket(
     private val client: HttpClient,
     private val host: String,
-    private val port: Int,
+    private val port: Int? = null,
     private val path: String,
     private val secure: Boolean = false,
     private val retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
+    private val requestBuilder: HttpRequestBuilder.() -> Unit = {},
     private val logger: Logger? = null
 ) {
-    private val url = "${if (secure) "wss" else "ws"}://$host:$port$path"
+    private val url = buildString {
+        append(if (secure) "wss" else "ws")
+        append("://")
+        append(host)
+        if (port != null) {
+            append(":")
+            append(port)
+        }
+        append(path)
+    }
 
     private val _connectionState = MutableStateFlow<WebSocketConnectionState>(
         WebSocketConnectionState.Disconnected
@@ -138,7 +163,7 @@ class ReconnectingWebSocket(
                     updateState(WebSocketConnectionState.Connecting(url))
                     log("Connecting to $url")
 
-                    client.webSocket(urlString = url) {
+                    client.webSocket(urlString = url, request = requestBuilder) {
                         currentSession.set(this)
                         attempt = 0 // Reset attempt counter on successful connection
 

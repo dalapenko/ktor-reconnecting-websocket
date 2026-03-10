@@ -1,9 +1,9 @@
 package io.github.dalapenko.ktor.websocket.reconnect
 
-import io.ktor.client.HttpClient
-import io.ktor.client.plugins.logging.Logger
-import io.ktor.websocket.Frame
-import io.ktor.websocket.readText
+import io.ktor.client.*
+import io.ktor.client.plugins.logging.*
+import io.ktor.client.request.*
+import io.ktor.websocket.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.map
@@ -17,40 +17,44 @@ import kotlinx.coroutines.flow.map
 
 /**
  * Creates a reconnecting WebSocket connection and returns a Flow of incoming frames.
- * 
+ *
  * This is a convenience extension that creates a [ReconnectingWebSocket] internally
  * and returns the frame flow directly. Use this when you don't need to observe
  * connection state separately.
- * 
+ *
  * ## Example:
  * ```kotlin
  * val client = HttpClient(CIO) { install(WebSockets) }
- * 
+ *
  * client.reconnectingWebSocket(
- *     host = "localhost",
- *     port = 8080,
+ *     host = "api.example.com",
  *     path = "/events",
+ *     secure = true,
  *     retryPolicy = RetryPolicy(maxRetries = 5),
+ *     requestBuilder = { headers.append("Authorization", "Bearer $token") },
  *     logger = Logger.DEFAULT
  * ).collect { frame ->
  *     println("Received: $frame")
  * }
  * ```
- * 
+ *
  * @param host WebSocket server host
- * @param port WebSocket server port
+ * @param port WebSocket server port. If null, the scheme default is used (80 for `ws://`, 443 for `wss://`).
  * @param path WebSocket endpoint path (must start with "/")
  * @param secure If true, uses `wss://` (TLS). Defaults to false (`ws://`).
  * @param retryPolicy Configuration for retry behavior
+ * @param requestBuilder Optional lambda applied to the HTTP upgrade request. Use to set auth headers,
+ *                       cookies, or query parameters.
  * @param logger Optional Ktor Logger for logging connection events
  * @return Flow of incoming WebSocket frames
  */
 fun HttpClient.reconnectingWebSocket(
     host: String,
-    port: Int,
+    port: Int? = null,
     path: String,
     secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
+    requestBuilder: HttpRequestBuilder.() -> Unit = {},
     logger: Logger? = null
 ): Flow<Frame> {
     val ws = ReconnectingWebSocket(
@@ -60,6 +64,7 @@ fun HttpClient.reconnectingWebSocket(
         path = path,
         secure = secure,
         retryPolicy = retryPolicy,
+        requestBuilder = requestBuilder,
         logger = logger
     )
     return ws.connect()
@@ -67,36 +72,40 @@ fun HttpClient.reconnectingWebSocket(
 
 /**
  * Creates a reconnecting WebSocket connection that returns only text messages.
- * 
+ *
  * This is a convenience extension that filters for text frames and extracts
  * the text content directly.
- * 
+ *
  * ## Example:
  * ```kotlin
  * client.reconnectingWebSocketText(
- *     host = "localhost",
- *     port = 8080,
+ *     host = "api.example.com",
  *     path = "/events",
+ *     secure = true,
+ *     requestBuilder = { headers.append("Authorization", "Bearer $token") },
  *     logger = Logger.DEFAULT
  * ).collect { text ->
  *     println("Message: $text")
  * }
  * ```
- * 
+ *
  * @param host WebSocket server host
- * @param port WebSocket server port
+ * @param port WebSocket server port. If null, the scheme default is used (80 for `ws://`, 443 for `wss://`).
  * @param path WebSocket endpoint path
  * @param secure If true, uses `wss://` (TLS). Defaults to false (`ws://`).
  * @param retryPolicy Configuration for retry behavior
+ * @param requestBuilder Optional lambda applied to the HTTP upgrade request. Use to set auth headers,
+ *                       cookies, or query parameters.
  * @param logger Optional Ktor Logger for logging connection events
  * @return Flow of incoming text messages as Strings
  */
 fun HttpClient.reconnectingWebSocketText(
     host: String,
-    port: Int,
+    port: Int? = null,
     path: String,
     secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
+    requestBuilder: HttpRequestBuilder.() -> Unit = {},
     logger: Logger? = null
 ): Flow<String> {
     return reconnectingWebSocket(
@@ -105,27 +114,29 @@ fun HttpClient.reconnectingWebSocketText(
         path = path,
         secure = secure,
         retryPolicy = retryPolicy,
+        requestBuilder = requestBuilder,
         logger = logger
     ).mapTextFrames()
 }
 
 /**
  * Creates a [ReconnectingWebSocket] instance for full control over the connection.
- * 
+ *
  * Use this when you need to:
  * - Observe connection state changes via [ReconnectingWebSocket.connectionState]
  * - Manually close the connection via [ReconnectingWebSocket.close]
  * - Access the [ReconnectingWebSocket.isConnected] property
- * 
+ *
  * ## Example:
  * ```kotlin
  * val ws = client.createReconnectingWebSocket(
- *     host = "localhost",
- *     port = 8080,
+ *     host = "api.example.com",
  *     path = "/events",
+ *     secure = true,
+ *     requestBuilder = { headers.append("Authorization", "Bearer $token") },
  *     logger = Logger.DEFAULT
  * )
- * 
+ *
  * // Observe state changes
  * launch {
  *     ws.connectionState.collect { state ->
@@ -137,27 +148,30 @@ fun HttpClient.reconnectingWebSocketText(
  *         }
  *     }
  * }
- * 
+ *
  * // Connect and receive messages
  * ws.connect().collect { frame ->
  *     println("Frame: $frame")
  * }
  * ```
- * 
+ *
  * @param host WebSocket server host
- * @param port WebSocket server port
+ * @param port WebSocket server port. If null, the scheme default is used (80 for `ws://`, 443 for `wss://`).
  * @param path WebSocket endpoint path
  * @param secure If true, uses `wss://` (TLS). Defaults to false (`ws://`).
  * @param retryPolicy Configuration for retry behavior
+ * @param requestBuilder Optional lambda applied to the HTTP upgrade request. Use to set auth headers,
+ *                       cookies, or query parameters.
  * @param logger Optional Ktor Logger for logging connection events
  * @return A [ReconnectingWebSocket] instance
  */
 fun HttpClient.createReconnectingWebSocket(
     host: String,
-    port: Int,
+    port: Int? = null,
     path: String,
     secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
+    requestBuilder: HttpRequestBuilder.() -> Unit = {},
     logger: Logger? = null
 ): ReconnectingWebSocket {
     return ReconnectingWebSocket(
@@ -167,6 +181,7 @@ fun HttpClient.createReconnectingWebSocket(
         path = path,
         secure = secure,
         retryPolicy = retryPolicy,
+        requestBuilder = requestBuilder,
         logger = logger
     )
 }

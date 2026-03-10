@@ -1,14 +1,11 @@
 package io.github.dalapenko.ktor.websocket.reconnect
 
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.mock.MockEngine
-import io.ktor.client.engine.mock.respondError
-import io.ktor.client.engine.mock.respondOk
-import io.ktor.client.plugins.logging.EMPTY
-import io.ktor.client.plugins.logging.Logger
-import io.ktor.client.plugins.websocket.WebSockets
-import io.ktor.http.HttpStatusCode
-import io.ktor.websocket.Frame
+import io.ktor.client.*
+import io.ktor.client.engine.mock.*
+import io.ktor.client.plugins.logging.*
+import io.ktor.client.plugins.websocket.*
+import io.ktor.http.*
+import io.ktor.websocket.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -17,7 +14,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -46,7 +42,7 @@ class ReconnectingWebSocketTest {
 
     @Test
     fun `connectionState emits Connecting when connect called`() = runTest {
-        val mockEngine = MockEngine { request ->
+        val mockEngine = MockEngine {
             // Simulate connection failure
             respondError(HttpStatusCode.ServiceUnavailable)
         }
@@ -96,7 +92,7 @@ class ReconnectingWebSocketTest {
 
     @Test
     fun `connectionState emits Failed after connection error with NO_RETRY`() = runTest {
-        val mockEngine = MockEngine { request ->
+        val mockEngine = MockEngine {
             respondError(HttpStatusCode.ServiceUnavailable)
         }
 
@@ -138,7 +134,7 @@ class ReconnectingWebSocketTest {
     @Test
     fun `connectionState emits Reconnecting after failure with retry policy`() = runTest {
         var attemptCount = 0
-        val mockEngine = MockEngine { request ->
+        val mockEngine = MockEngine {
             attemptCount++
             // Always fail to trigger reconnection
             respondError(HttpStatusCode.ServiceUnavailable)
@@ -232,7 +228,7 @@ class ReconnectingWebSocketTest {
     @Test
     fun `retry policy is respected for max retries`() = runTest {
         var connectionAttempts = 0
-        val mockEngine = MockEngine { request ->
+        val mockEngine = MockEngine {
             connectionAttempts++
             respondError(HttpStatusCode.ServiceUnavailable)
         }
@@ -412,8 +408,150 @@ class ReconnectingWebSocketTest {
     }
 
     @Test
-    fun `custom exception filter is respected`() = runTest {
+    fun `null port omits port from URL`() = runTest {
+        val connectionPaused = CompletableDeferred<Unit>()
+        val mockEngine = MockEngine {
+            connectionPaused.await()
+            respondError(HttpStatusCode.ServiceUnavailable)
+        }
+        val client = HttpClient(mockEngine) { install(WebSockets) }
+
+        val ws = ReconnectingWebSocket(
+            client = client,
+            host = "api.example.com",
+            port = null,
+            path = "/stream",
+            secure = true,
+            retryPolicy = RetryPolicy.NO_RETRY,
+            logger = Logger.EMPTY
+        )
+
+        val connectJob = launch { ws.connect().collect { } }
+
+        val connectingState = ws.connectionState
+            .first { it is WebSocketConnectionState.Connecting } as WebSocketConnectionState.Connecting
+
+        assertTrue(
+            connectingState.url.startsWith("wss://api.example.com/"),
+            "Expected URL without explicit port, got: ${connectingState.url}"
+        )
+        assertFalse(
+            connectingState.url.contains(":443") || connectingState.url.matches(Regex(".*:\\d+.*")),
+            "URL should not contain a port component, got: ${connectingState.url}"
+        )
+
+        connectionPaused.complete(Unit)
+        connectJob.join()
+        client.close()
+    }
+
+    @Test
+    fun `explicit port is included in URL`() = runTest {
+        val connectionPaused = CompletableDeferred<Unit>()
+        val mockEngine = MockEngine {
+            connectionPaused.await()
+            respondError(HttpStatusCode.ServiceUnavailable)
+        }
+        val client = HttpClient(mockEngine) { install(WebSockets) }
+
+        val ws = ReconnectingWebSocket(
+            client = client,
+            host = "localhost",
+            port = 9090,
+            path = "/test",
+            secure = false,
+            retryPolicy = RetryPolicy.NO_RETRY,
+            logger = Logger.EMPTY
+        )
+
+        val connectJob = launch { ws.connect().collect { } }
+
+        val connectingState = ws.connectionState
+            .first { it is WebSocketConnectionState.Connecting } as WebSocketConnectionState.Connecting
+
+        assertEquals(
+            connectingState.url,
+            "ws://localhost:9090/test",
+            "Expected ws://localhost:9090/test, got: ${connectingState.url}"
+        )
+
+        connectionPaused.complete(Unit)
+        connectJob.join()
+        client.close()
+    }
+
+    @Test
+    fun `requestBuilder headers are sent with WebSocket upgrade request`() = runTest {
+        var capturedAuthHeader: String? = null
         val mockEngine = MockEngine { request ->
+            capturedAuthHeader = request.headers["Authorization"]
+            respondError(HttpStatusCode.ServiceUnavailable)
+        }
+        val client = HttpClient(mockEngine) { install(WebSockets) }
+
+        val ws = ReconnectingWebSocket(
+            client = client,
+            host = "localhost",
+            port = 8080,
+            path = "/secure",
+            retryPolicy = RetryPolicy.NO_RETRY,
+            requestBuilder = {
+                headers.append("Authorization", "Bearer test-token")
+            },
+            logger = Logger.EMPTY
+        )
+
+        val connectJob = launch { ws.connect().collect { } }
+        connectJob.join()
+
+        assertEquals("Bearer test-token", capturedAuthHeader, "Authorization header should be forwarded")
+
+        client.close()
+    }
+
+    @Test
+    fun `requestBuilder is applied on every reconnection attempt`() = runTest {
+        var attemptCount = 0
+        val capturedHeaders = mutableListOf<String?>()
+        val mockEngine = MockEngine { request ->
+            attemptCount++
+            capturedHeaders.add(request.headers["Authorization"])
+            respondError(HttpStatusCode.ServiceUnavailable)
+        }
+        val client = HttpClient(mockEngine) { install(WebSockets) }
+
+        val ws = ReconnectingWebSocket(
+            client = client,
+            host = "localhost",
+            port = 8080,
+            path = "/secure",
+            retryPolicy = RetryPolicy(
+                maxRetries = 2,
+                initialDelay = 50.milliseconds,
+                maxDelay = 100.milliseconds,
+                jitterFactor = 0.0
+            ),
+            requestBuilder = {
+                headers.append("Authorization", "Bearer token-123")
+            },
+            logger = Logger.EMPTY
+        )
+
+        val connectJob = launch { ws.connect().collect { } }
+        connectJob.join()
+
+        assertTrue(attemptCount > 1, "Expected multiple connection attempts")
+        assertTrue(
+            capturedHeaders.all { it == "Bearer token-123" },
+            "Authorization header should be present on every attempt, got: $capturedHeaders"
+        )
+
+        client.close()
+    }
+
+    @Test
+    fun `custom exception filter is respected`() = runTest {
+        val mockEngine = MockEngine {
             throw IllegalStateException("Test exception")
         }
 

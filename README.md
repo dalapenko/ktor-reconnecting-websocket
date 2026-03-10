@@ -22,12 +22,14 @@ Ktor's WebSocket client provides basic connectivity, but **doesn't handle reconn
 
 **ktor-reconnecting-websocket** is a library that wraps Ktor's WebSocket client with:
 
-✅ **Automatic reconnection** - Transparently reconnects on connection loss  
-✅ **Smart retry policies** - Exponential backoff with jitter to prevent thundering herd  
-✅ **Observable states** - Track connection status via Kotlin StateFlow  
-✅ **Configurable behavior** - Pre-defined policies or custom retry strategies  
-✅ **Zero boilerplate** - Simple extension functions on `HttpClient`  
-✅ **Flow-based API** - Native Kotlin coroutines integration  
+✅ **Automatic reconnection** - Transparently reconnects on connection loss
+✅ **Smart retry policies** - Exponential backoff with jitter to prevent thundering herd
+✅ **Observable states** - Track connection status via Kotlin StateFlow
+✅ **Configurable behavior** - Pre-defined policies or custom retry strategies
+✅ **Zero boilerplate** - Simple extension functions on `HttpClient`
+✅ **Flow-based API** - Native Kotlin coroutines integration
+✅ **Optional port** - Omit port to use scheme defaults (ws → 80, wss → 443)
+✅ **Authentication** - Pass auth headers, cookies, or query params via `requestBuilder`
 
 ---
 
@@ -38,7 +40,7 @@ Ktor's WebSocket client provides basic connectivity, but **doesn't handle reconn
 **Gradle (Kotlin DSL)**
 ```kotlin
 dependencies {
-    implementation("io.github.dalapenko:ktor-reconnecting-websocket:1.0.0")
+    implementation("io.github.dalapenko:ktor-reconnecting-websocket:1.1.0")
     implementation("io.ktor:ktor-client-cio:$ktor_version") // Or any other engine
 }
 ```
@@ -46,7 +48,7 @@ dependencies {
 **Gradle (Groovy DSL)**
 ```groovy
 dependencies {
-    implementation 'io.github.dalapenko:ktor-reconnecting-websocket:1.0.0'
+    implementation 'io.github.dalapenko:ktor-reconnecting-websocket:1.1.0'
     implementation "io.ktor:ktor-client-cio:$ktor_version"
 }
 ```
@@ -56,7 +58,7 @@ dependencies {
 <dependency>
     <groupId>io.github.dalapenko</groupId>
     <artifactId>ktor-reconnecting-websocket</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
@@ -67,12 +69,11 @@ val client = HttpClient(CIO) {
     install(WebSockets)
 }
 
-// Connect with auto-reconnect (use secure = true for wss://)
+// Connect with auto-reconnect (port is optional — omit to use scheme default)
 client.reconnectingWebSocket(
     host = "api.example.com",
-    port = 443,
     path = "/stream",
-    secure = true,
+    secure = true,                // wss:// with default port 443
     retryPolicy = RetryPolicy.DEFAULT
 ).collect { frame ->
     when (frame) {
@@ -139,9 +140,8 @@ Track connection status in real-time:
 ```kotlin
 val ws = client.createReconnectingWebSocket(
     host = "api.example.com",
-    port = 443,
     path = "/stream",
-    secure = true,
+    secure = true,                // port omitted — uses wss:// default (443)
     retryPolicy = RetryPolicy.INFINITE
 )
 
@@ -207,10 +207,11 @@ client.reconnectingWebSocket(
 ```kotlin
 fun HttpClient.reconnectingWebSocket(
     host: String,
-    port: Int,
+    port: Int? = null,                          // null = scheme default (80/443)
     path: String,
     secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
+    requestBuilder: HttpRequestBuilder.() -> Unit = {},
     logger: Logger? = null
 ): Flow<Frame>
 ```
@@ -222,10 +223,11 @@ fun HttpClient.reconnectingWebSocket(
 ```kotlin
 fun HttpClient.reconnectingWebSocketText(
     host: String,
-    port: Int,
+    port: Int? = null,
     path: String,
     secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
+    requestBuilder: HttpRequestBuilder.() -> Unit = {},
     logger: Logger? = null
 ): Flow<String>
 ```
@@ -237,10 +239,11 @@ fun HttpClient.reconnectingWebSocketText(
 ```kotlin
 fun HttpClient.createReconnectingWebSocket(
     host: String,
-    port: Int,
+    port: Int? = null,
     path: String,
     secure: Boolean = false,
     retryPolicy: RetryPolicy = RetryPolicy.DEFAULT,
+    requestBuilder: HttpRequestBuilder.() -> Unit = {},
     logger: Logger? = null
 ): ReconnectingWebSocket
 ```
@@ -321,10 +324,9 @@ class ReconnectingWebSocket {
 ```kotlin
 val client = HttpClient(CIO) { install(WebSockets) }
 
-// Connect to a streaming API (secure = true for wss://)
+// Connect to a streaming API (port omitted — wss:// uses 443 by default)
 client.reconnectingWebSocketText(
     host = "api.crypto.com",
-    port = 443,
     path = "/prices",
     secure = true,
     retryPolicy = RetryPolicy.INFINITE  // Never stop trying
@@ -340,7 +342,6 @@ client.reconnectingWebSocketText(
 // Create reconnecting WebSocket with state tracking
 val chatSocket = client.createReconnectingWebSocket(
     host = "chat.example.com",
-    port = 443,
     path = "/chat",
     secure = true,
     retryPolicy = RetryPolicy.AGGRESSIVE
@@ -374,7 +375,31 @@ suspend fun sendMessage(text: String) {
 }
 ```
 
-### Example 3: IoT Device with Logging
+### Example 3: Authenticated WebSocket Connection
+
+```kotlin
+val client = HttpClient(CIO) { install(WebSockets) }
+
+// Token-based authentication (header applied on every connection/reconnection attempt)
+client.reconnectingWebSocket(
+    host = "api.example.com",
+    path = "/stream",
+    secure = true,
+    retryPolicy = RetryPolicy.DEFAULT,
+    requestBuilder = {
+        headers.append("Authorization", "Bearer $accessToken")
+        // Other headers or query params can be added here too:
+        // url.parameters.append("api_key", apiKey)
+    }
+).collect { frame ->
+    if (frame is Frame.Text) println(frame.readText())
+}
+```
+
+> **Note:** `requestBuilder` is applied on **every** connection attempt, including reconnections.
+> This means dynamically refreshed tokens will be picked up automatically on reconnect.
+
+### Example 4: IoT Device with Logging (with port)
 
 ```kotlin
 val client = HttpClient(CIO) {
